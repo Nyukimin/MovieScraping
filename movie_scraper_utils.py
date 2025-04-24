@@ -83,26 +83,31 @@ def save_json(data, filepath):
 
 # --- DataFrame 操作 ---
 def check_and_add_columns(df, required_columns):
-    """DataFrameに必要な列が存在するか確認し、なければNaN/NAで初期化して追加する"""
-    df_updated = df.copy() # 元のDataFrameを変更しないようにコピー
+    """DataFrameに必要な列が存在するか確認し、なければNaNで追加する。"""
+    added_cols = []
     for col in required_columns:
-        if col not in df_updated.columns:
-            logging.info(f"出力に必要な列 '{col}' が存在しないため、追加します。")
-            # pandas 1.0以降推奨の NA を使用
-            if col in ['year', 'runtime']:
-                 df_updated[col] = pd.NA
-            else:
-                 df_updated[col] = pd.NA # 文字列やJSON文字列も NA
-    # 型変換 (初期化後に行う)
-    if 'year' in df_updated.columns:
-        df_updated['year'] = pd.to_numeric(df_updated['year'], errors='coerce').astype('Int64')
-    if 'runtime' in df_updated.columns:
-        df_updated['runtime'] = pd.to_numeric(df_updated['runtime'], errors='coerce').astype('Int64')
-    if 'movie_id' in df_updated.columns:
-         # movie_id は文字列として扱うことを推奨
-         df_updated['movie_id'] = df_updated['movie_id'].astype(str)
+        if col not in df.columns:
+            df[col] = pd.NA # または np.nan
+            added_cols.append(col)
+    if added_cols:
+        logging.info(f"以下の列をNaNで追加しました: {added_cols}")
 
-    return df_updated
+    # --- FutureWarning対策: 主要な出力列の dtype を object に設定 --- 
+    # (movie_id は load_csv で str に変換される想定)
+    # (year, runtime は後で数値に変換されるため、ここでは object のままで良い)
+    cols_to_object = [col for col in DEFAULT_OUTPUT_COLUMNS if col != 'movie_id']
+    try:
+        for col in cols_to_object:
+            if col in df.columns and df[col].dtype != 'object':
+                 # すでに object 型でなければ変換 (NaN を含む場合は object が適切)
+                 # Int64 や Float64 など数値型になっている場合がある
+                 df[col] = df[col].astype('object')
+        logging.debug(f"列 {cols_to_object} の dtype を object に設定しました (FutureWarning対策)")
+    except Exception as e:
+        logging.warning(f"列の dtype 変換中にエラーが発生しました: {e}")
+    # --- ここまで追加 ---
+
+    return df
 
 def reorder_columns(df, column_order):
     """DataFrameの列を指定された順序に並び替える"""

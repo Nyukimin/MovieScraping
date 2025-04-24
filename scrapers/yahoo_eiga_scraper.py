@@ -17,26 +17,41 @@ HEADERS = {
 def search_yahoo_eiga(title):
     """Yahoo!映画で映画タイトルを検索し、最上位の作品ページのURLを取得する (推測)"""
     search_query = quote(title)
-    search_url = f"https://movies.yahoo.co.jp/search/?q={search_query}"
+    # search_url = f"https://movies.yahoo.co.jp/search/?q={search_query}" # 元のURL
+    # リダイレクト先の可能性が高い search.yahoo.co.jp を直接使う方が安定するかも
+    search_url = f"https://search.yahoo.co.jp/movie?p={search_query}"
     try:
         logging.info(f"[Yahoo!映画] 検索中: {title} (URL: {search_url})")
+        # allow_redirects=True (デフォルト) でリダイレクトに対応
         response = requests.get(search_url, headers=HEADERS, timeout=15)
         response.raise_for_status()
+
+        # --- デバッグ用に検索結果HTMLを保存 ---
+        try:
+            debug_filename = "_debug_search_result_yahoo.html"
+            with open(debug_filename, "wb") as f:
+                f.write(response.content)
+            logging.debug(f"  [Yahoo!映画] デバッグ用に検索結果HTMLを '{debug_filename}' に保存しました。")
+        except Exception as e:
+            logging.warning(f"  [Yahoo!映画] デバッグ用検索結果HTMLの保存中にエラー: {e}")
+        # --- デバッグ用ここまで ---
+
         soup = BeautifulSoup(response.content, 'html.parser')
 
-        # --- !! 推測セレクタ !! ---
-        # 検索結果リストから最初の映画へのリンクを探す
-        # 例: <div class="rsltlst"> <ul> <li> <a href="/movie/...">...</a></li></ul></div>
-        # または <section class="ResultList"> <div class="ResultList_item"> <a href="/movie/...">...</a></div></section>
-        result_link = soup.select_one('div.ResultList__itemBody a[href^="/movie/"], section.ResultList .ResultList_item a[href^="/movie/"]') # より具体的に絞り込み
+        # --- !! 新しい推測セレクタ (search.yahoo.co.jp 向け) !! ---
+        # 例: <div class="sw-CardBase ..."> <a class="sw-Card__titleInner" href="https://movies.yahoo.co.jp/movie/..."> ... </a> </div>
+        # 映画セクション内の最初の movies.yahoo.co.jp へのリンクを探す
+        # result_link = soup.select_one('div.sw-CardBase a.sw-Card__titleInner[href*="/movie/"]') # 以前のセレクタ (eiga.comも拾ってしまう)
+        result_link = soup.select_one('div.sw-CardBase a.sw-Card__titleInner[href^="https://movies.yahoo.co.jp/movie/"]') # 前方一致に変更
 
         if result_link and result_link.get('href'):
-            # 相対URLを絶対URLに変換
-            movie_page_url = "https://movies.yahoo.co.jp" + result_link['href']
+            movie_page_url = result_link['href'] # 絶対URLのはず
+            # クエリパラメータなどを除去する場合
+            movie_page_url = movie_page_url.split('?')[0]
             logging.info(f"  [Yahoo!映画] 作品ページURL発見: {movie_page_url}")
             return movie_page_url
         else:
-            logging.warning(f"  [Yahoo!映画] 検索結果で作品ページが見つかりませんでした: {title}")
+            logging.warning(f"  [Yahoo!映画] 検索結果HTML内で作品ページリンクが見つかりませんでした: {title}")
             return None
     except requests.exceptions.Timeout:
         logging.error(f"[Yahoo!映画] 検索タイムアウト: {title} ({search_url})")
