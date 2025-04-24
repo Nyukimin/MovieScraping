@@ -1,6 +1,6 @@
 映画詳細情報自動補完ツール：仕様書
 ✦ 概要
-映画タイトルのみが記載されたCSVファイルにおいて、**未入力の詳細項目（公開年、監督名、あらすじ等）**を、映画.comから自動で収集・補完、または指定されたJSONファイルから読み込んで補完し、CSVファイルとして出力するPythonベースの自動処理スクリプト。
+映画タイトルのみが記載されたCSVファイルにおいて、**未入力の詳細項目（公開年、監督名、あらすじ等）**を、複数の映画情報サイト（**映画.com, Kinenote, Yahoo!映画, Filmarks** 等）から自動で収集・補完、または指定されたJSONファイルから読み込んで補完し、CSVファイルとして出力するPythonベースの自動処理スクリプト群。
 
 ✦ 処理対象
 入力形式：
@@ -9,7 +9,7 @@
     *   オプション列（存在しない場合は自動追加）: `year`, `director`, `summary`, `cast`, `producer`, `cinematographer`, `country`, `runtime`, `distributor`, `full_staff`, `full_cast`, `reviews`
 2.  **JSONファイル (`--json-input`, オプション)**: UTF-8エンコーディング
     *   形式: 映画情報の辞書を含むリスト。各辞書には `movie_id` および上記オプション列に対応するキーが含まれることを期待。
-    *   例: `MovieData_YYYYMMDDHHMMSS.json`
+    *   例: `MovieData_<サイト名>_YYYYMMDDHHMMSS.json` (サイトごとに生成される場合)
 
 Web検索（スクレイピング）が実行される条件：
 `--json-input` オプションが **指定されない** 場合で、かつCSVファイル内に以下の **いずれか** に該当する映画レコードが存在する場合
@@ -19,25 +19,27 @@ Web検索（スクレイピング）が実行される条件：
 *   `summary` が空欄またはNaN
 
 ✦ 主な機能とフロー
-*   **モード分岐:** `--json-input` オプションの有無で処理が分岐する。
+*   **サイト別スクリプト:** 各映画情報サイトに対応する個別のスクレイパー (`scrapers/<サイト名>_scraper.py`) と、それを呼び出すメインスクリプト (`fill_movie_details_<サイト名>.py`) によって処理を実行する。
+*   **モード分岐:** 各メインスクリプトにおいて、`--json-input` オプションの有無で処理が分岐する。
 
 **【Web検索モード (`--json-input` なし)】**
 
-① CSV読み込み
+① CSV読み込み (各 `fill_movie_details_<サイト名>.py` 共通)
     *   Shift_JIS で読み込み (`--input`)
     *   データ構造を pandas.DataFrame として保持
     *   必須列 (`movie_id`, `title`) が存在しない場合はエラー終了
     *   仕様書記載のオプション列が存在しない場合は追加して NaN で初期化
     *   `year`, `runtime` 列を数値型 (Int64) に変換 (変換できない値は NaN)
 
-② 詳細未入力映画の抽出
+② 詳細未入力映画の抽出 (各 `fill_movie_details_<サイト名>.py` 共通)
     *   上記の「Web検索が実行される条件」に該当するレコードから、 `--limit` で指定された件数 (デフォルト5件) を抽出
     *   優先順位：`movie_id` 昇順でソートして選定
 
-③ 映画.comによる情報取得（スクレイピング）
-    *   抽出された各映画タイトルで映画.comを検索
-    *   検索結果の最上位の作品リンクを取得
-    *   作品ページから以下の情報を取得：
+③ 映画情報サイトによる情報取得（スクレイピング, サイトごとに実装）
+    *   **対象サイト:** スクリプト名に対応するサイト（例: `fill_movie_details_kinenote.py` ならKinenote）
+    *   抽出された各映画タイトルで対象サイトを検索
+    *   検索結果から最上位（または最も適切）と思われる作品リンクを取得
+    *   作品ページから以下の情報を取得（サイトによって取得可能な項目は異なる）：
         *   `year` (公開年)
         *   `director` (監督)
         *   `summary` (あらすじ, 最大300字程度)
@@ -50,17 +52,20 @@ Web検索（スクレイピング）が実行される条件：
         *   `full_staff` (全スタッフ情報, 辞書のリスト)
         *   `full_cast` (全キャスト情報, 辞書のリスト)
         *   `reviews` (レビュー情報, 辞書のリスト)
-    *   各リクエスト間に 1秒、各タイトル処理後に 0.2秒 の待機時間を挿入
-    *   最後にスクレイピングしたページのHTMLを `_debug_last_scraped_page.html` に保存
+    *   **スクレイピング手法:**
+        *   基本は `requests` + `BeautifulSoup` を使用。
+        *   JavaScriptによる動的コンテンツ読み込みが必要なサイト（例: Kinenoteのリンク抽出）の場合、**Selenium** を使用する実装を検討・導入する。
+    *   **待機時間:** 各リクエスト間やタイトル処理後に適切な待機時間を挿入（例: 1秒など）。
+    *   **デバッグ用ファイル:** `--debug` オプション指定時、最後にスクレイピングしたページや検索結果ページのHTMLを `_debug_last_scraped_page_<サイト名>.html` や `_debug_search_result_<サイト名>.html` のようなファイル名で保存する。
 
 ④ 取得データの一次保存 (JSON)
     *   ③で取得した全映画 (limit件数分) の詳細データをリストに格納
-    *   タイムスタンプ付きのJSONファイル (`MovieData_YYYYMMDDHHMMSS.json`) にUTF-8で出力
+    *   サイト名とタイムスタンプ付きのJSONファイル (`MovieData_<サイト名>_YYYYMMDDHHMMSS.json`) にUTF-8で出力
 
 ⑤ CSVの更新 (Web検索結果)
     *   ③で取得した情報を元に、DataFrameを更新。
     *   更新条件: 元のDataFrameの値が NaN の場合のみ。
-    *   `year` が取得できなかった場合は `1800` を設定。
+    *   `year` が取得できなかった場合はサイトや仕様に応じて処理（例: Kinenoteでは未設定、旧映画.comでは`1800`）。
     *   `full_staff`, `full_cast`, `reviews` はJSON文字列に変換して保存。
     *   `year`, `runtime` は数値 (Int64) として保存。
 
@@ -96,28 +101,36 @@ Web検索（スクレイピング）が実行される条件：
 
 ✦ 制約・注意点
 *   Web検索モードでは、各実行で処理するのは `--limit` で指定された最大件数 (デフォルト5件)。
-*   映画.com側のサイト構造が変更された場合、スクレイピングが機能しなくなる可能性がある。
+*   **対象サイト側の構造変更:** 各映画情報サイトのHTML構造や仕様が変更された場合、対応するスクレイピング処理が機能しなくなる可能性がある。
 *   ネットワークエラーやサイト側の応答によっては情報取得に失敗する場合がある (Web検索モード)。
-*   公開年が取得できない場合、Web検索モードでは `1800` という固定値が設定される。
-*   Shift_JISで保存する際、エンコードできない文字は `?` に置換されるため、元の情報が一部失われる可能性がある。
+*   **Shift_JISエンコード:** 保存時にShift_JISで表現できない文字は `?` に置換され、情報が一部欠落する可能性がある。
+*   **Selenium利用時の注意:**
+    *   Seleniumを使用するスクリプトを実行する場合、対応するブラウザの **WebDriver** のセットアップが別途必要になる。
+    *   `requests` に比べ、処理速度が低下し、メモリ消費量が増加する傾向がある。
 *   JSON入力モードでは、入力JSONファイルの形式が期待通りでない場合、エラー終了または意図しない動作をする可能性がある。
-*   User-Agent は一般的なブラウザ (`Chrome`) のものを設定。
+*   User-Agent はサイトに応じて適切なものを設定（例: 一般的なブラウザ）。
 
 ✦ 今後の拡張候補（備考）
-*   より高度な「未入力」判定ロジック（特定の列が空の場合のみ対象とする等）
+*   より高度な「未入力」判定ロジック
+*   取得情報ソース（どのサイトから取得したか）をCSVに記録
 *   GPTs連携による補完＋整形
 *   あらすじの要約精度の向上
-*   GUI操作 or GPTs化（ファイルアップ→DL）
-*   より堅牢なエラーハンドリングとリトライ処理 (Web検索モード)
+*   GUI操作 or GPTs化
+*   より堅牢なエラーハンドリングとリトライ処理
+*   複数サイトを一括で検索・最適な情報を選択する機能
 
 ✦ 想定実行例（CLI）
-*   Web検索で補完 (最大10件):
+*   KinenoteからWeb検索で補完 (最大10件、デバッグモード):
     ```bash
-    python fill_movie_details.py --input movies.csv --output movies_updated_web.csv --limit 10
+    python fill_movie_details_kinenote.py --input movies.csv --output movies_updated_kinenote.csv --limit 10 --debug
     ```
-*   JSONファイルから補完:
+*   Yahoo!映画からWeb検索で補完 (デフォルト5件):
     ```bash
-    python fill_movie_details.py --input movies.csv --output movies_updated_json.csv --json-input MovieData_YYYYMMDDHHMMSS.json
+    python fill_movie_details_yahooeiga.py --input movies.csv --output movies_updated_yahoo.csv
+    ```
+*   KinenoteのJSONファイルから補完:
+    ```bash
+    python fill_movie_details_kinenote.py --input movies.csv --output movies_updated_from_json.csv --json-input MovieData_kinenote.com_YYYYMMDDHHMMSS.json
     ```
 
 【重要】CSVファイルはGitで管理しない
